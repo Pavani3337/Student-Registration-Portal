@@ -1,46 +1,27 @@
-/**
- * @fileoverview Types for the config-array package.
- * @author Nicholas C. Zakas
- */
+import type { SourceMapInput } from '@jridgewell/trace-mapping';
 
-/**
- * A file matcher used in `files` and `ignores`.
- */
-export type FileMatcher = string | ((filePath: string) => boolean);
+export type {
+  SourceMapSegment,
+  DecodedSourceMap,
+  EncodedSourceMap,
+} from '@jridgewell/trace-mapping';
 
-/**
- * An entry in a config's `files` array.
- *
- * A subarray means all matchers must match.
- */
-export type FilesMatcher = FileMatcher | FileMatcher[];
+export type { SourceMapInput };
 
-/**
- * The config types allowed in the `extraConfigTypes` option.
- */
-export type ExtraConfigType = "array" | "function";
+export type LoaderContext = {
+  readonly importer: string;
+  readonly depth: number;
+  source: string;
+  content: string | null | undefined;
+  ignore: boolean | undefined;
+};
 
-export interface ConfigObject {
-	/**
-	 * The base path for files and ignores.
-	 */
-	basePath?: string;
+export type SourceMapLoader = (
+  file: string,
+  ctx: LoaderContext,
+) => SourceMapInput | null | undefined | void;
 
-	/**
-	 * The files to include.
-	 */
-	files?: FilesMatcher[];
-
-	/**
-	 * The files to exclude.
-	 */
-	ignores?: FileMatcher[];
-
-	/**
-	 * The name of the config object.
-	 */
-	name?: string;
-
-	// may also have any number of other properties
-	[key: string]: unknown;
-}
+export type Options = {
+  excludeContent?: boolean;
+  decodedMappings?: boolean;
+};
