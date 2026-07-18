@@ -1,218 +1,145 @@
-# @jridgewell/remapping
+# @rolldown/pluginutils [![npm](https://img.shields.io/npm/v/@rolldown/pluginutils.svg)](https://npmx.dev/package/@rolldown/pluginutils)
 
-> Remap sequential sourcemaps through transformations to point at the original source code
+Plugin utilities for [Rolldown](https://rolldown.rs).
 
-Remapping allows you to take the sourcemaps generated through transforming your code and "remap"
-them to the original source locations. Think "my minified code, transformed with babel and bundled
-with webpack", all pointing to the correct location in your original source code.
+Includes regex helpers for plugin hook filters, composable filter expressions, and a helper for filtering out Vite-serve-only plugins.
 
-With remapping, none of your source code transformations need to be aware of the input's sourcemap,
-they only need to generate an output sourcemap. This greatly simplifies building custom
-transformations (think a find-and-replace).
+## Install
 
-## Installation
-
-```sh
-npm install @jridgewell/remapping
+```bash
+pnpm add -D @rolldown/pluginutils
 ```
 
 ## Usage
 
-```typescript
-function remapping(
-  map: SourceMap | SourceMap[],
-  loader: (file: string, ctx: LoaderContext) => (SourceMap | null | undefined),
-  options?: { excludeContent: boolean, decodedMappings: boolean }
-): SourceMap;
+```ts
+import { exactRegex, prefixRegex, makeIdFiltersToMatchWithQuery } from '@rolldown/pluginutils'
+```
 
-// LoaderContext gives the loader the importing sourcemap, tree depth, the ability to override the
-// "source" location (where child sources are resolved relative to, or the location of original
-// source), and the ability to override the "content" of an original source for inclusion in the
-// output sourcemap.
-type LoaderContext = {
- readonly importer: string;
- readonly depth: number;
- source: string;
- content: string | null | undefined;
+All filter helpers are also exposed via the `/filter` subpath:
+
+```ts
+import { and, or, id, include } from '@rolldown/pluginutils/filter'
+```
+
+## Regex helpers
+
+### `exactRegex`
+
+- **Type:** `(str: string, flags?: string) => RegExp`
+
+Constructs a `RegExp` that matches the exact string specified. Useful as a plugin hook filter.
+
+```ts
+import { exactRegex } from '@rolldown/pluginutils'
+
+const plugin = {
+  name: 'plugin',
+  resolveId: {
+    filter: { id: exactRegex('foo') },
+    handler(id) {}, // only called for `foo`
+  },
 }
 ```
 
-`remapping` takes the final output sourcemap, and a `loader` function. For every source file pointer
-in the sourcemap, the `loader` will be called with the resolved path. If the path itself represents
-a transformed file (it has a sourcmap associated with it), then the `loader` should return that
-sourcemap. If not, the path will be treated as an original, untransformed source code.
+### `prefixRegex`
 
-```js
-// Babel transformed "helloworld.js" into "transformed.js"
-const transformedMap = JSON.stringify({
-  file: 'transformed.js',
-  // 1st column of 2nd line of output file translates into the 1st source
-  // file, line 3, column 2
-  mappings: ';CAEE',
-  sources: ['helloworld.js'],
-  version: 3,
-});
+- **Type:** `(str: string, flags?: string) => RegExp`
 
-// Uglify minified "transformed.js" into "transformed.min.js"
-const minifiedTransformedMap = JSON.stringify({
-  file: 'transformed.min.js',
-  // 0th column of 1st line of output file translates into the 1st source
-  // file, line 2, column 1.
-  mappings: 'AACC',
-  names: [],
-  sources: ['transformed.js'],
-  version: 3,
-});
+Constructs a `RegExp` that matches values starting with the specified prefix.
 
-const remapped = remapping(
-  minifiedTransformedMap,
-  (file, ctx) => {
+```ts
+import { prefixRegex } from '@rolldown/pluginutils'
 
-    // The "transformed.js" file is an transformed file.
-    if (file === 'transformed.js') {
-      // The root importer is empty.
-      console.assert(ctx.importer === '');
-      // The depth in the sourcemap tree we're currently loading.
-      // The root `minifiedTransformedMap` is depth 0, and its source children are depth 1, etc.
-      console.assert(ctx.depth === 1);
-
-      return transformedMap;
-    }
-
-    // Loader will be called to load transformedMap's source file pointers as well.
-    console.assert(file === 'helloworld.js');
-    // `transformed.js`'s sourcemap points into `helloworld.js`.
-    console.assert(ctx.importer === 'transformed.js');
-    // This is a source child of `transformed`, which is a source child of `minifiedTransformedMap`.
-    console.assert(ctx.depth === 2);
-    return null;
-  }
-);
-
-console.log(remapped);
-// {
-//   file: 'transpiled.min.js',
-//   mappings: 'AAEE',
-//   sources: ['helloworld.js'],
-//   version: 3,
-// };
+const plugin = {
+  name: 'plugin',
+  resolveId: {
+    filter: { id: prefixRegex('foo') },
+    handler(id) {}, // called for IDs starting with `foo`
+  },
+}
 ```
 
-In this example, `loader` will be called twice:
+### `makeIdFiltersToMatchWithQuery`
 
-1. `"transformed.js"`, the first source file pointer in the `minifiedTransformedMap`. We return the
-   associated sourcemap for it (its a transformed file, after all) so that sourcemap locations can
-   be traced through it into the source files it represents.
-2. `"helloworld.js"`, our original, unmodified source code. This file does not have a sourcemap, so
-   we return `null`.
+- **Type:** `(input: string | RegExp | (string | RegExp)[]) => string | RegExp | (string | RegExp)[]`
 
-The `remapped` sourcemap now points from `transformed.min.js` into locations in `helloworld.js`. If
-you were to read the `mappings`, it says "0th column of the first line output line points to the 1st
-column of the 2nd line of the file `helloworld.js`".
+Converts an id filter so that it also matches ids that include a query string.
 
-### Multiple transformations of a file
+```ts
+import { makeIdFiltersToMatchWithQuery } from '@rolldown/pluginutils'
 
-As a convenience, if you have multiple single-source transformations of a file, you may pass an
-array of sourcemap files in the order of most-recent transformation sourcemap first. Note that this
-changes the `importer` and `depth` of each call to our loader. So our above example could have been
-written as:
-
-```js
-const remapped = remapping(
-  [minifiedTransformedMap, transformedMap],
-  () => null
-);
-
-console.log(remapped);
-// {
-//   file: 'transpiled.min.js',
-//   mappings: 'AAEE',
-//   sources: ['helloworld.js'],
-//   version: 3,
-// };
+const plugin = {
+  name: 'plugin',
+  transform: {
+    filter: { id: makeIdFiltersToMatchWithQuery(['**/*.js', /\.ts$/]) },
+    // Matches:
+    //   foo.js, foo.js?foo, foo.txt?foo.js,
+    //   foo.ts, foo.ts?foo, foo.txt?foo.ts
+    handler(code, id) {},
+  },
+}
 ```
 
-### Advanced control of the loading graph
+## Composable filters
 
-#### `source`
+[Composable filter expressions](https://rolldown.rs/apis/plugin-api/hook-filters#composable-filters) for use cases where a simple `id`/`include`/`exclude` is not enough. For example, when a plugin needs to combine `id`, `moduleType`, `code`, and `query` conditions.
 
-The `source` property can overridden to any value to change the location of the current load. Eg,
-for an original source file, it allows us to change the location to the original source regardless
-of what the sourcemap source entry says. And for transformed files, it allows us to change the
-relative resolving location for child sources of the loaded sourcemap.
+```ts
+import { and, code, id, include, interpreter, moduleType, or } from '@rolldown/pluginutils'
 
-```js
-const remapped = remapping(
-  minifiedTransformedMap,
-  (file, ctx) => {
+const expr = include(and(or(id(/\.tsx?$/), id(/\.jsx?$/)), moduleType('tsx'), code(/import React/)))
 
-    if (file === 'transformed.js') {
-      // We pretend the transformed.js file actually exists in the 'src/' directory. When the nested
-      // source files are loaded, they will now be relative to `src/`.
-      ctx.source = 'src/transformed.js';
-      return transformedMap;
-    }
-
-    console.assert(file === 'src/helloworld.js');
-    // We could futher change the source of this original file, eg, to be inside a nested directory
-    // itself. This will be reflected in the remapped sourcemap.
-    ctx.source = 'src/nested/transformed.js';
-    return null;
-  }
-);
-
-console.log(remapped);
-// {
-//   …,
-//   sources: ['src/nested/helloworld.js'],
-// };
+interpreter(expr, sourceCode, sourceId, 'tsx') // boolean
 ```
 
+### Builders
 
-#### `content`
+| Builder                        | Description                                                                                                                                              |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `and(...exprs)`                | All operands must match.                                                                                                                                 |
+| `or(...exprs)`                 | At least one operand must match.                                                                                                                         |
+| `not(expr)`                    | Negates the operand.                                                                                                                                     |
+| `id(pattern, params?)`         | Match the module id. `pattern` is `string` or `RegExp`. `params.cleanUrl` strips the query/hash before matching.                                         |
+| `importerId(pattern, params?)` | Match the importer's id. Same shape as `id`.                                                                                                             |
+| `moduleType(type)`             | Match Rolldown's module type (`'js'`, `'jsx'`, `'ts'`, `'tsx'`, `'json'`, `'text'`, `'base64'`, `'dataurl'`, `'binary'`, `'empty'`, or a custom string). |
+| `code(pattern)`                | Match the module source. `string` matches with `includes`; `RegExp` with `test`.                                                                         |
+| `query(key, pattern)`          | Match a single query parameter. `pattern` is `boolean` (key presence/truthiness), `string` (exact value), or `RegExp` (value pattern).                   |
+| `queries(obj)`                 | Shorthand for `and(...)` over multiple `query` entries.                                                                                                  |
+| `include(expr)`                | Top-level wrapper marking `expr` as an inclusion rule.                                                                                                   |
+| `exclude(expr)`                | Top-level wrapper marking `expr` as an exclusion rule.                                                                                                   |
 
-The `content` property can be overridden when we encounter an original source file. Eg, this allows
-you to manually provide the source content of the original file regardless of whether the
-`sourcesContent` field is present in the parent sourcemap. It can also be set to `null` to remove
-the source content.
+### `interpreter`
 
-```js
-const remapped = remapping(
-  minifiedTransformedMap,
-  (file, ctx) => {
+- **Type:** `(exprs, code?, id?, moduleType?, importerId?) => boolean`
 
-    if (file === 'transformed.js') {
-      // transformedMap does not include a `sourcesContent` field, so usually the remapped sourcemap
-      // would not include any `sourcesContent` values.
-      return transformedMap;
-    }
+Evaluates one or more top-level expressions against the given inputs. Returns `true` when at least one `include` matches and no `exclude` matches; when no `include` is present, defaults to `true` unless an `exclude` matches.
 
-    console.assert(file === 'helloworld.js');
-    // We can read the file to provide the source content.
-    ctx.content = fs.readFileSync(file, 'utf8');
-    return null;
-  }
-);
+The argument required by each expression must be provided. For example, evaluating an `id(...)` expression without passing `id` will throw.
 
-console.log(remapped);
-// {
-//   …,
-//   sourcesContent: [
-//     'console.log("Hello world!")',
-//   ],
-// };
+## `filterVitePlugins`
+
+- **Type:** `<T>(plugins: T | T[] | null | undefined | false) => T[]`
+
+Removes Vite plugins that target the dev server (`apply: 'serve'`) from a (possibly nested) plugin array. Plugins whose `apply` is a function are invoked with a `command: 'build'` context to decide. Useful when reusing a Vite plugin array inside a Rolldown config.
+
+```ts
+import { defineConfig } from 'rolldown'
+import { filterVitePlugins } from '@rolldown/pluginutils'
+import viteReact from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: filterVitePlugins([
+    viteReact(),
+    {
+      name: 'dev-only',
+      apply: 'serve', // filtered out
+      // ...
+    },
+  ]),
+})
 ```
 
-### Options
+## License
 
-#### excludeContent
-
-By default, `excludeContent` is `false`. Passing `{ excludeContent: true }` will exclude the
-`sourcesContent` field from the returned sourcemap. This is mainly useful when you want to reduce
-the size out the sourcemap.
-
-#### decodedMappings
-
-By default, `decodedMappings` is `false`. Passing `{ decodedMappings: true }` will leave the
-`mappings` field in a [decoded state](https://github.com/rich-harris/sourcemap-codec) instead of
-encoding into a VLQ string.
+MIT
